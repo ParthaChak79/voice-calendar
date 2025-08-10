@@ -13,10 +13,13 @@ class CalendarExtension {
       const replitUrl = await this.detectReplitUrl();
       if (replitUrl) {
         this.serverUrl = replitUrl;
+        console.log('Detected Replit URL:', replitUrl);
       }
     } catch (error) {
       console.log('Not running on Replit, using localhost');
     }
+
+    console.log('Using server URL:', this.serverUrl);
 
     // Test server connection
     const isConnected = await this.testConnection();
@@ -34,6 +37,8 @@ class CalendarExtension {
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
         if (tabs[0] && tabs[0].url) {
           const url = new URL(tabs[0].url);
+          console.log('Current tab URL:', url.hostname);
+          
           if (url.hostname.includes('replit.app')) {
             // Extract the Replit app URL
             const replitUrl = `https://${url.hostname}`;
@@ -51,18 +56,35 @@ class CalendarExtension {
   async testConnection() {
     try {
       console.log(`Testing connection to ${this.serverUrl}...`);
+      
+      // First try a simple fetch to see if server is reachable
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+      
       const response = await fetch(`${this.serverUrl}/api/auth/me`, {
         method: 'GET',
         credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
         },
+        signal: controller.signal
       });
       
+      clearTimeout(timeoutId);
       console.log('Server response status:', response.status);
-      return response.status < 500; // Accept 401 (not authenticated) but not 500 (server error)
+      
+      // Accept any response that's not a network error
+      return response.status < 500 || response.status === 401; // 401 is OK (not authenticated)
     } catch (error) {
       console.error('Connection test failed:', error);
+      
+      // If localhost fails, try alternative URLs
+      if (this.serverUrl.includes('localhost')) {
+        console.log('Localhost failed, trying 127.0.0.1...');
+        this.serverUrl = 'http://127.0.0.1:5000';
+        return this.testConnection();
+      }
+      
       return false;
     }
   }
@@ -73,36 +95,54 @@ class CalendarExtension {
     const appContent = document.getElementById('app-content');
     const iframe = document.getElementById('app-container');
 
+    if (!loading || !appContent || !iframe) {
+      console.error('Required DOM elements not found');
+      this.showError();
+      return;
+    }
+
     // Hide loading and show app
     loading.style.display = 'none';
     appContent.style.display = 'block';
 
     // Load the calendar app in iframe
     iframe.src = this.serverUrl;
+    console.log('Setting iframe src to:', this.serverUrl);
     
     // Handle iframe load events
     iframe.onload = () => {
       console.log('Calendar app loaded successfully');
     };
 
-    iframe.onerror = () => {
-      console.error('Failed to load calendar app');
+    iframe.onerror = (error) => {
+      console.error('Failed to load calendar app:', error);
       this.showError();
     };
+
+    // Add timeout fallback
+    setTimeout(() => {
+      if (iframe.contentDocument && iframe.contentDocument.readyState !== 'complete') {
+        console.warn('Iframe taking too long to load, showing error');
+        this.showError();
+      }
+    }, 15000); // 15 second timeout
   }
 
   showError() {
     console.log('Showing error state');
     const loading = document.getElementById('loading');
     const error = document.getElementById('error');
+    const appContent = document.getElementById('app-content');
     
-    loading.style.display = 'none';
-    error.style.display = 'block';
+    if (loading) loading.style.display = 'none';
+    if (appContent) appContent.style.display = 'none';
+    if (error) error.style.display = 'block';
   }
 }
 
 // Initialize extension when popup opens
 document.addEventListener('DOMContentLoaded', () => {
+  console.log('DOM Content Loaded, initializing extension...');
   new CalendarExtension();
 });
 
@@ -112,4 +152,13 @@ window.addEventListener('resize', () => {
   if (iframe) {
     iframe.style.height = `${window.innerHeight - 60}px`; // Account for header
   }
+});
+
+// Add error handling for uncaught errors
+window.addEventListener('error', (event) => {
+  console.error('Uncaught error in popup:', event.error);
+});
+
+window.addEventListener('unhandledrejection', (event) => {
+  console.error('Unhandled promise rejection in popup:', event.reason);
 });

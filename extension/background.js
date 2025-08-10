@@ -1,7 +1,11 @@
 // Background script for the calendar extension
 class CalendarBackground {
   constructor() {
-    this.serverUrl = 'http://localhost:5000';
+    this.serverUrls = [
+      'http://localhost:5000',
+      'http://127.0.0.1:5000'
+    ];
+    this.activeServerUrl = null;
     this.init();
   }
 
@@ -11,10 +15,31 @@ class CalendarBackground {
     chrome.action.onClicked.addListener(this.onActionClicked.bind(this));
     chrome.notifications.onClicked.addListener(this.onNotificationClicked.bind(this));
     
+    // Find working server URL
+    this.findWorkingServer();
+    
     // Set up alarm for periodic event checking
     this.setupPeriodicCheck();
   }
 
+  async findWorkingServer() {
+    for (const url of this.serverUrls) {
+      try {
+        const response = await fetch(`${url}/api/auth/me`, {
+          method: 'GET',
+          credentials: 'include',
+        });
+        
+        if (response.status < 500) {
+          this.activeServerUrl = url;
+          console.log('Found working server:', url);
+          break;
+        }
+      } catch (error) {
+        console.log('Server not available:', url);
+      }
+    }
+  }
   async onInstalled(details) {
     console.log('Calendar extension installed:', details.reason);
     
@@ -39,9 +64,8 @@ class CalendarBackground {
     console.log('Notification clicked:', notificationId);
     
     // Open the calendar app in a new tab
-    chrome.tabs.create({
-      url: this.serverUrl,
-    });
+    const serverUrl = this.activeServerUrl || this.serverUrls[0];
+    chrome.tabs.create({ url: serverUrl });
   }
 
   async setupPeriodicCheck() {
@@ -58,11 +82,16 @@ class CalendarBackground {
   async checkUpcomingEvents(alarm) {
     if (alarm.name !== 'checkUpcomingEvents') return;
 
+    if (!this.activeServerUrl) {
+      await this.findWorkingServer();
+      if (!this.activeServerUrl) return;
+    }
+
     try {
       console.log('Checking for upcoming events...');
       
       // Get events from the server
-      const response = await fetch(`${this.serverUrl}/api/events`, {
+      const response = await fetch(`${this.activeServerUrl}/api/events`, {
         method: 'GET',
         credentials: 'include',
         headers: {
